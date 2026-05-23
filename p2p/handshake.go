@@ -1,9 +1,5 @@
 package p2p
 
+type HandshakeFunc func(any) error
 
-type Handshaker interface {
-
-	Handshake () error
-
-
-}
+func NOPHandshakeFunc(any) error { return nil }
