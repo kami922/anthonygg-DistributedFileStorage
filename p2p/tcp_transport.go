@@ -19,6 +19,12 @@ func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
 
 }
 
+// it implements Peer interface which will close the connection to peer
+// when called.
+func (p *TCPPeer) Close() error {
+	return p.conn.Close()
+}
+
 type TCPTransportOpts struct {
 	ListenAddr    string
 	HandshakeFunc HandshakeFunc
@@ -29,15 +35,22 @@ type TCPTransportOpts struct {
 type TCPTransport struct {
 	TCPTransportOpts
 	listener net.Listener
-	// rpcch    chan RPC
+	rpcch    chan RPC
 }
 
 func NewTCPTransport(opts TCPTransportOpts) *TCPTransport {
 	return &TCPTransport{
 		TCPTransportOpts: opts,
-		// rpcch:            make(chan RPC, 1024),
+		rpcch:            make(chan RPC, 1024),
 	}
 }
+
+// it implements Transport Inteface which will return read only channel
+// for reading incomming messages from peers in network.
+func (t *TCPTransport) Consume() <-chan RPC {
+	return t.rpcch
+}
+
 func (t *TCPTransport) ListenAndAccept() error {
 
 	var err error
@@ -65,23 +78,42 @@ func (t *TCPTransport) startAcceptLoop() {
 type Temp struct{}
 
 func (t *TCPTransport) handleConn(conn net.Conn) {
+	var err error
+	defer func() {
+		fmt.Printf("dropping peer connection %s", err)
+		conn.Close()
+	}()
+
 	peer := NewTCPPeer(conn, true)
 
 	if err := t.HandshakeFunc(peer); err != nil {
-		conn.Close()
-		fmt.Printf("Handshake error: %s\n", err)
 		return
 	}
 
-	fmt.Printf("new incoming connection %+v\n", peer)
-
-	msg := &Message{}
-	for {
-		if err := t.Decoder.Decode(conn, msg); err != nil {
-			fmt.Printf("TCP error: %s\n", err)
+	if t.OnPeer != nil {
+		if err := t.OnPeer(peer); err != nil {
 			return
 		}
-		msg.From = conn.RemoteAddr()
-		fmt.Printf("new message received %+v\n", msg)
+	}
+
+	// Read loop
+	for {
+		rpc := RPC{}
+		err = t.Decoder.Decode(conn, &rpc)
+		if err != nil {
+			return
+		}
+
+		// rpc.From = conn.RemoteAddr().String()
+
+		// if rpc.Stream {
+		// 	peer.wg.Add(1)
+		// 	fmt.Printf("[%s] incoming stream, waiting...\n", conn.RemoteAddr())
+		// 	peer.wg.Wait()
+		// 	fmt.Printf("[%s] stream closed, resuming read loop\n", conn.RemoteAddr())
+		// 	continue
+		// }
+		rpc.From = conn.RemoteAddr()
+		t.rpcch <- rpc
 	}
 }
